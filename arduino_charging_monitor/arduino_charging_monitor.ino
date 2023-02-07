@@ -1,10 +1,14 @@
 #include <Wire.h>
 #include "DFRobot_INA219.h"
 
+#include <SPI.h>
+#include <SD.h>
+
 #define SHUNT 0.0012 /* Ohms */
 #define SHUNT_R_40 /* 40mV shunt range, comment for 80mV */
 #define V_RANGE_16 /* Volts - comment for 32V max bus voltage */
 #define STEP 10 /* seconds */
+#define SPI_CS D8 /* SPI CS pin */
 
 DFRobot_INA219_IIC ina219(&Wire, INA219_I2C_ADDRESS1);
 float busVoltage = 0.0;
@@ -14,7 +18,12 @@ float totalCapacity = 0.0;
 float shuntVoltage = 0.0;
 float power = 0.0;
 unsigned long counter = 0u;
+bool isSDPresent = false;
+File fp;
 
+bool setup_SD(){
+  return SD.begin(SPI_CS);
+}
 
 void setup_ina219(){
   ina219.reset();
@@ -43,13 +52,34 @@ float getPower(float current, float busVoltage){
 
 void setup(){
   Serial.begin(9600);
-  Wire.begin(D1,D2);
-  setup_ina219();
+  //Wire.begin(D1,D2);
+  isSDPresent = setup_SD();
+  if (isSDPresent){
+    Serial.println("SD Present");
+    readConfig();
+  }
+  else {
+    Serial.println("SD not ready");
+  }
+  // setup_ina219();
+}
+
+void readConfig(){
+  fp = SD.open("config.txt");
+  if (fp){
+    Serial.println("File opened");
+    while (fp.available()){
+      Serial.print(fp.readString()); 
+    }
+    fp.close();
+  }
+  else{
+    Serial.println("File opening error");
+  }
 }
 
 
-void loop()
-{
+void reporDataViaSerial(){
   counter++;
   delay(STEP * 1000);
   shuntVoltage = ina219.getShuntVoltage_mV();
@@ -82,4 +112,9 @@ void loop()
   Serial.println("Ah");
 
   Serial.println("");
+}
+
+void loop()
+{
+  delay(1000);
 }
