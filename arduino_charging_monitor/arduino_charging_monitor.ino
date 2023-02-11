@@ -9,7 +9,7 @@
 #define SHUNT_R_40 /* 40mV shunt range, comment for 80mV */
 #define V_RANGE_16 /* Volts - comment for 32V max bus voltage */
 #define STEP 10 /* seconds */
-#define SPI_CS 3
+#define SPI_CS 15 /* D8 HCS */
 
 
 DFRobot_INA219_IIC ina219(&Wire, INA219_I2C_ADDRESS1);
@@ -113,10 +113,10 @@ float getPower(float current, float busVoltage){
 
 void setup(){
   Serial.begin(9600);
-  Wire.begin(D3,D2);
+//  Wire.begin(D1,D2);
 //  I2CScanner();
-  setup_LCD();
-  /*
+//  setup_LCD();
+
   isSDPresent = setup_SD();
   if (isSDPresent){
     Serial.println("SD Present");
@@ -125,8 +125,8 @@ void setup(){
   else {
     Serial.println("SD not ready");
   }
-  setup_ina219();
-  */
+  // setup_ina219();
+  
 }
 
 void readConfig(){
