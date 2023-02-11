@@ -1,5 +1,6 @@
 #include <Wire.h>
 #include "DFRobot_INA219.h"
+#include "LiquidCrystal_I2C.h" //https://github.com/fmalpartida/New-LiquidCrystal
 
 #include <SPI.h>
 #include <SD.h>
@@ -8,9 +9,14 @@
 #define SHUNT_R_40 /* 40mV shunt range, comment for 80mV */
 #define V_RANGE_16 /* Volts - comment for 32V max bus voltage */
 #define STEP 10 /* seconds */
-#define SPI_CS D8 /* SPI CS pin */
+#define SPI_CS 3
+
 
 DFRobot_INA219_IIC ina219(&Wire, INA219_I2C_ADDRESS1);
+
+LiquidCrystal_I2C lcd(0x27,16,2);
+
+
 float busVoltage = 0.0;
 float current = 0.0;
 float totalPower = 0.0;
@@ -20,6 +26,61 @@ float power = 0.0;
 unsigned long counter = 0u;
 bool isSDPresent = false;
 File fp;
+
+void I2CScanner(){
+  byte error, address;
+  int nDevices;
+  Serial.println("Scanning...");
+
+  nDevices = 0;
+  for(address = 1; address < 254; address++ )
+  {
+    delay(100);
+    Wire.beginTransmission(address);
+    error = Wire.endTransmission();
+
+    if (error == 0)
+    {
+      Serial.print("I2C device found at address 0x");
+      if (address < 16)
+        Serial.print("0");
+
+      Serial.print(address,HEX);
+      Serial.println("  !");
+
+      nDevices++;
+    }
+    else if (error==4)
+    {
+      Serial.print("Unknown error at address 0x");
+      if (address < 16)
+        Serial.print("0");
+
+      Serial.println(address,HEX);
+    }
+    else{
+      Serial.print("No device at address 0x");
+      if (address < 16)
+        Serial.print("0");
+
+      Serial.println(address,HEX);
+    }
+  }
+
+  if (nDevices == 0)
+    Serial.println("No I2C devices found");
+  else
+    Serial.println("done");
+}
+
+
+void setup_LCD(){
+  lcd.begin(); 
+  lcd.setCursor(0, 0);
+  lcd.print("Czesc!");
+  lcd.setCursor(0,1);
+  lcd.print("Test kontrastu!");
+}
 
 bool setup_SD(){
   return SD.begin(SPI_CS);
@@ -52,7 +113,10 @@ float getPower(float current, float busVoltage){
 
 void setup(){
   Serial.begin(9600);
-  //Wire.begin(D1,D2);
+  Wire.begin(D3,D2);
+//  I2CScanner();
+  setup_LCD();
+  /*
   isSDPresent = setup_SD();
   if (isSDPresent){
     Serial.println("SD Present");
@@ -61,7 +125,8 @@ void setup(){
   else {
     Serial.println("SD not ready");
   }
-  // setup_ina219();
+  setup_ina219();
+  */
 }
 
 void readConfig(){
@@ -77,6 +142,8 @@ void readConfig(){
     Serial.println("File opening error");
   }
 }
+
+
 
 
 void reporDataViaSerial(){
