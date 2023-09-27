@@ -1,16 +1,16 @@
 #include <Wire.h>
 #include "DFRobot_INA219.h"
-#include "LiquidCrystal_I2C.h" //https://github.com/fmalpartida/New-LiquidCrystal
+#include <Adafruit_SH110X.h>
 
 #include <SPI.h>
 #include <SD.h>
 
-#define SHUNT 0.0012 /* Ohms */
-#define SHUNT_R_40 /* 40mV shunt range, comment for 80mV */
+#define SHUNT 3.75 /* mOhms */
+// #define SHUNT_R_40 /* 40mV shunt range, comment for 80mV */
 #define V_RANGE_16 /* Volts - comment for 32V max bus voltage */
-#define STEP 300 /* seconds */
+#define STEP 10 /* seconds */
 #define SPI_CS 15 /* D8 HCS pin */
-#define LCD_I2C_ADDRESS 0x27
+#define OLED_I2C_ADDRESS 0x3C
 #define INA_I2C_ADDRESS 0x40
 #define OFF_CURRENT 0.5 /* minimal of current's aboslute value to stop logging second mode
 #define OFF_DELAY 300 /* nuber of seconds befor OFF_CURRENT is checked */
@@ -18,12 +18,14 @@
 #define MIN_6V 5.26 /* 3 cells * 1.75V) */
 #define MAX_6V 8.4/* 3 cells * 2.8V) */
 #define MAX_12V 16.8 /* 6 cells *2.8V) */
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
 
 
 DFRobot_INA219_IIC ina219(&Wire, INA_I2C_ADDRESS);
 
-LiquidCrystal_I2C lcd(LCD_I2C_ADDRESS,16,2);
-
+Adafruit_SH1106G display = Adafruit_SH1106G(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 float busVoltage = 0.0;
 float current = 0.0;
@@ -61,7 +63,7 @@ void I2CScanner(){
   nDevices = 0;
   for(address = 1; address < 254; address++ )
   {
-    delay(100);
+    delay(50);
     Wire.beginTransmission(address);
     error = Wire.endTransmission();
 
@@ -84,13 +86,6 @@ void I2CScanner(){
 
       Serial.println(address,HEX);
     }
-    else{
-      Serial.print("No device at address 0x");
-      if (address < 16)
-        Serial.print("0");
-
-      Serial.println(address,HEX);
-    }
   }
 
   if (nDevices == 0)
@@ -99,14 +94,6 @@ void I2CScanner(){
     Serial.println("done");
 }
 
-
-void setup_LCD(){
-  lcd.begin(); 
-  lcd.setCursor(0, 0);
-  lcd.print("Czesc!");
-  lcd.setCursor(0,1);
-  lcd.print("Test kontrastu!");
-}
 
 bool setup_SD(){
   return SD.begin(SPI_CS);
@@ -130,18 +117,21 @@ void setup_ina219(){
 }
 
 float getCurrent(float shuntVoltage_mV){
-  return shuntVoltage_mV * SHUNT * 1000.0;
+  return shuntVoltage_mV / SHUNT;
 }
 
-float getPower(float current, float busVoltage){
-  return current*busVoltage;
+float getPower(float measured_current, float measured_busVoltage){
+  return measured_current*measured_busVoltage;
+}
+
+void OLED_setup(){
+  display.begin(OLED_I2C_ADDRESS, true);
+  display.display();
 }
 
 void setup(){
   Serial.begin(9600);
-//  Wire.begin(D1,D2);
-//  I2CScanner();
-//  setup_LCD();
+  Wire.begin(D2,D1);
 
   isSDOk = setup_SD();
   if (isSDOk){
@@ -151,8 +141,8 @@ void setup(){
   else {
     Serial.println("SD not ready");
   }
-  // setup_ina219();
-  
+  setup_ina219();
+  OLED_setup();
 }
 
 void readConfig(){
@@ -201,7 +191,7 @@ void readConfig(){
       }
     }
     // check if there's a fingerprint for https certificate
-    if (strlent(url)>0 && strlen(SSLFingerpring)==0) isConfigOK=false;
+    if (strlen(url)>0 && strlen(SSLFingerpring)==0) isConfigOK=false;
     else isConfigOK = true;
     Serial.print("SSID:"); Serial.println(SSID);
     Serial.print("WPA2KEY:"); Serial.println(WPAKey);
@@ -231,19 +221,19 @@ void reporDataViaSerial(){
   Serial.println("V");
 
   Serial.print("Shunt Voltage:   ");
-  Serial.print(shuntVoltage, 1);
+  Serial.print(shuntVoltage, 2);
   Serial.println("mV");
 
   Serial.print("Current:      ");
-  Serial.print(current, 1);
+  Serial.print(current, 2);
   Serial.println("A");
 
   Serial.print("Power:        ");
-  Serial.print(power, 1);
+  Serial.print(power, 2);
   Serial.println("W");
 
   Serial.print("Total power:        ");
-  Serial.print(totalPower, 1);
+  Serial.print(totalPower, 2);
   Serial.println("Wh");
 
   Serial.print("Capacity:        ");
@@ -255,5 +245,5 @@ void reporDataViaSerial(){
 
 void loop()
 {
-  delay(1000);
+  reporDataViaSerial();
 }
