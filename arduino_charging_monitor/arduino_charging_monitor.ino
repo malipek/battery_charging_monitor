@@ -1,32 +1,57 @@
-#include <Wire.h>
-#include "DFRobot_INA219.h"
-#include <Adafruit_SH110X.h>
+/*
+NodeMCU v3 pins used:
+A0 - analog voltage-ladder based keypad
+D1 - I2C SCL
+D2 - I2C SDA
+D5 - SPI SCK
+D6 - SPI MOSI
+D7 - SPI MISO
+D8 - SPI CS for card reader
+*/
 
-#include <SPI.h>
-#include <SD.h>
+#define DEBUG // comment-out for productions
 
-#define SHUNT 3.75 /* mOhms */
+/* Default for config */
+
+#define SHUNT 3.75 /* mOhms, default 20A 80mV */
 // #define SHUNT_R_40 /* 40mV shunt range, comment for 80mV */
 #define V_RANGE_16 /* Volts - comment for 32V max bus voltage */
-#define STEP 10 /* seconds */
-#define SPI_CS 15 /* D8 HCS pin */
-#define OLED_I2C_ADDRESS 0x3C
-#define INA_I2C_ADDRESS 0x40
-#define OFF_CURRENT 0.5 /* minimal of current's aboslute value to stop logging second mode
-#define OFF_DELAY 300 /* nuber of seconds befor OFF_CURRENT is checked */
-#define MAX_URL_LENGTH 100
-#define MIN_6V 5.26 /* 3 cells * 1.75V) */
-#define MAX_6V 8.4/* 3 cells * 2.8V) */
-#define MAX_12V 16.8 /* 6 cells *2.8V) */
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
-#define OLED_RESET -1
+#define STEP 60 /* seconds */
+#define OFF_CURRENT 0.2 /* minimal of current's aboslute value to stop logging auto mode */
+#define OFF_DELAY 300 /* nuber of seconds before recording is disabled for OFF_CURENT */
+#define MIN_6V 5.26 /* 3 cells * 1.75V */
+#define MAX_6V 8.4/* 3 cells * 2.8V */
+#define MAX_12V 16.8 /* 6 cells *2.8V */
 
+/* NodeMCUv3 wiring setup */
+#define KEYBOARD A0 // analog read - buttons resistor-ladder
+#define SPI_CS 15 /* D8 HCS pin */
+#define LCD_I2C_ADDRESS 0x27
+#define INA_I2C_ADDRESS 0x40
+ /* treshold ADC values for buttons */
+#define ANALOG_UP 150
+#define ANALOG_DOWN 450
+#define ANALOG_ENTER 824
+
+
+#include <Wire.h>
+#include "DFRobot_INA219.h"
+#include <LiquidCrystal_I2C.h>
+#include <SPI.h>
+#include <SD.h>
+#include <ESP8266WiFi.h>
+#include "Adafruit_MQTT.h"
+#include "Adafruit_MQTT_Client.h"
 
 DFRobot_INA219_IIC ina219(&Wire, INA_I2C_ADDRESS);
+LiquidCrystal_I2C lcd(LCD_I2C_ADDRESS, 20, 4); 
+WiFiClient client;
+Adafruit_MQTT_Client *mqtt;
+Adafruit_MQTT_Publish *measurements;
 
-Adafruit_SH1106G display = Adafruit_SH1106G(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+enum ButtonType {NONE, UP, DOWN, ENTER};
 
+/* globals for data measurements */
 float busVoltage = 0.0;
 float current = 0.0;
 float totalPower = 0.0;
@@ -34,18 +59,26 @@ float totalCapacity = 0.0;
 float shuntVoltage = 0.0;
 float power = 0.0;
 unsigned long counter = 0u;
+
+/* runtime configs */
+bool regWiFi = false;
 bool isSDOk = false;
-File fp;
+bool reg = true; // start in registering mode
+bool regSD = false;
 bool continousMode = false;
 bool isConfigOK = false;
-
+bool started = false;
+bool lowCurrent = false;
+unsigned short lowCurrentTime = 0u;
 bool isWiFiok = false;
-unsigned long runningTime = 0;
-char *url = (char *)"";
+float batteryVoltage = 0.0;
+
+/* Network config values */
+char *MQTTendpoint = (char *)"";
 char *SSID = (char *)"";
 char *WPAKey = (char *)"";
-char *SSLFingerpring = (char *)""; /* URL's SSL public key fingerprint */
-float batteryVoltage = 0.0;
+char *MQTTTopic = (char *)"";
+int port = 1883;  //default MQTT plain text
 
 void getBatteryVoltage(float busVoltage){
   if (batteryVoltage == 0.0){
@@ -53,50 +86,6 @@ void getBatteryVoltage(float busVoltage){
     if (busVoltage > MAX_6V) batteryVoltage=12.0;
     if (busVoltage > MAX_12V) batteryVoltage=24.0;
   }
-}
-
-void I2CScanner(){
-  byte error, address;
-  int nDevices;
-  Serial.println("Scanning...");
-
-  nDevices = 0;
-  for(address = 1; address < 254; address++ )
-  {
-    delay(50);
-    Wire.beginTransmission(address);
-    error = Wire.endTransmission();
-
-    if (error == 0)
-    {
-      Serial.print("I2C device found at address 0x");
-      if (address < 16)
-        Serial.print("0");
-
-      Serial.print(address,HEX);
-      Serial.println("  !");
-
-      nDevices++;
-    }
-    else if (error==4)
-    {
-      Serial.print("Unknown error at address 0x");
-      if (address < 16)
-        Serial.print("0");
-
-      Serial.println(address,HEX);
-    }
-  }
-
-  if (nDevices == 0)
-    Serial.println("No I2C devices found");
-  else
-    Serial.println("done");
-}
-
-
-bool setup_SD(){
-  return SD.begin(SPI_CS);
 }
 
 void setup_ina219(){
@@ -124,37 +113,19 @@ float getPower(float measured_current, float measured_busVoltage){
   return measured_current*measured_busVoltage;
 }
 
-void OLED_setup(){
-  display.begin(OLED_I2C_ADDRESS, true);
-  display.display();
-}
-
-void setup(){
-  Serial.begin(9600);
-  Wire.begin(D2,D1);
-
-  isSDOk = setup_SD();
-  if (isSDOk){
-    Serial.println("SD Present");
-    readConfig();
-  }
-  else {
-    Serial.println("SD not ready");
-  }
-  setup_ina219();
-  OLED_setup();
-}
 
 void readConfig(){
-  fp = SD.open("config.txt");
+  File fp = SD.open("config.txt");
   char bufChrPtr[512];
-  char *strings[MAX_URL_LENGTH+2];
+  char *strings[66]; //64 bytes + 2
   char *ptr = NULL;
   char *ptr2 = NULL;
-  String buf="";
+  String buf = "";
   unsigned short index = 0;
   if (fp){
+    #ifdef DEBUG
     Serial.println("File opened"); 
+    #endif
     while (fp.available()){
       buf.concat(fp.readString());
     }
@@ -182,68 +153,362 @@ void readConfig(){
            ptr2 = strtok(NULL,  (char *)"=");
           if (strcmp("SSID",ptr)==0) SSID=ptr2;
           if (strcmp("WPA2KEY",ptr)==0) WPAKey=ptr2;
-          if (strcmp("ENDPOINT",ptr)==0) url=ptr2;
-          if (strcmp("CONTINOUS",ptr)==0) continousMode=(bool)ptr2;
-          if (strcmp("CERT_FINGERPRINT",ptr)==0) SSLFingerpring=ptr2;
+          if (strcmp("ENDPOINT",ptr)==0) MQTTendpoint=ptr2;
+          if (strcmp("PORT",ptr)==0) port=(int)ptr2;
+          if (strcmp("TOPIC",ptr)==0) MQTTTopic=ptr2;
           // get next token
           ptr = strtok(NULL,  (char *)"=");
         }
       }
     }
-    // check if there's a fingerprint for https certificate
-    if (strlen(url)>0 && strlen(SSLFingerpring)==0) isConfigOK=false;
-    else isConfigOK = true;
-    Serial.print("SSID:"); Serial.println(SSID);
-    Serial.print("WPA2KEY:"); Serial.println(WPAKey);
-    Serial.print("ENDPOINT:"); Serial.println(url);
-    Serial.print("CONTINOUS:"); Serial.println(continousMode?"true":"false");
-    Serial.print("CERT_FINGERPRINT:"); Serial.println(SSLFingerpring);
+    if (strlen(SSID)==0 || strlen(WPAKey)==0 || strlen(MQTTendpoint)==0 || strlen(MQTTTopic)==0)
+      isConfigOK = false;
+    #ifdef DEBUG
+    Serial.print(F("SSID:")); Serial.println(SSID);
+    Serial.print(F("WPA2KEY:")); Serial.println(WPAKey);
+    Serial.print(F("ENDPOINT:")); Serial.println(MQTTendpoint);
+    Serial.print(F("PORT:")); Serial.println(port);
+    Serial.print(F("TOPIC:")); Serial.println(MQTTTopic);
+    #endif
   }
   else{
     isConfigOK = false;
-    Serial.println("File opening error");
+    #ifdef DEBUG
+    Serial.println(F("File opening error"));
+    #endif
   }
 }
 
 
 
+void saveDataToCSV(){
+  File dataFile = SD.open("datalog.txt", FILE_WRITE);
+  if (dataFile){
+    String dataString = (String)(counter * STEP) + "," + (String)busVoltage + "," + (String)current + ";";
+    dataFile.seek(EOF);
+    dataFile.println(dataString);
+    dataFile.close();
+    #ifdef DEBUG
+      Serial.println(F("Data record saved do SD"));
+    #endif
+  }
+  else regSD=false;
+}
 
-void reporDataViaSerial(){
-  counter++;
-  delay(STEP * 1000);
+void measureData(){
   shuntVoltage = ina219.getShuntVoltage_mV();
   busVoltage = ina219.getBusVoltage_V();
   current = getCurrent(shuntVoltage);
   power = getPower(current, busVoltage);
   totalPower = totalPower + (power * STEP / 3600);
-  Serial.print("Bus Voltage:   ");
+  if (batteryVoltage==0.0){
+    // have we connected the battery?
+    getBatteryVoltage(busVoltage);
+  }
+  totalCapacity = (batteryVoltage==0.0?0.0:totalPower/batteryVoltage);
+  counter++;
+}
+
+
+#ifdef DEBUG
+void reportDataViaSerial(){
+  Serial.print(F("Bus Voltage:   "));
   Serial.print(busVoltage, 2);
-  Serial.println("V");
+  Serial.println(F("V"));
 
-  Serial.print("Shunt Voltage:   ");
+  Serial.print(F("Shunt Voltage:   "));
   Serial.print(shuntVoltage, 2);
-  Serial.println("mV");
+  Serial.println(F("mV"));
 
-  Serial.print("Current:      ");
+  Serial.print(F("Current:      "));
   Serial.print(current, 2);
-  Serial.println("A");
-
-  Serial.print("Power:        ");
+  Serial.println(F("A"));
+  Serial.print(F("Power:        "));
   Serial.print(power, 2);
-  Serial.println("W");
+  Serial.println(F("W"));
 
-  Serial.print("Total power:        ");
+  Serial.print(F("Total power:        "));
   Serial.print(totalPower, 2);
-  Serial.println("Wh");
+  Serial.println(F("Wh"));
 
-  Serial.print("Capacity:        ");
-  Serial.print((batteryVoltage==0.0?0.0:totalPower/batteryVoltage), 2);
-  Serial.println("Ah");
-
+  Serial.print(F("Capacity:        "));
+  Serial.print(totalCapacity, 2);
+  Serial.println(F("Ah"));
   Serial.println("");
+}
+#endif
+
+void displayData(){
+  lcd.clear();
+  lcd.print(F("TIME:"));
+  lcd.print((int)(counter * STEP / 3600));
+  lcd.print(F(":"));
+  lcd.print((int)(counter * STEP % 3600 / 60));
+  if (!reg) lcd.print(F(" STOP"));
+  lcd.setCursor(0,1);
+  lcd.print(F("MODE:"));
+  lcd.print(continousMode?F("CONT"):F("AUTO"));
+  lcd.print(F(" REG:"));
+  if (regWiFi && isWiFiok) lcd.print(F("WiFi "));
+  if (regSD && isSDOk) lcd.print(F("SD "));
+  lcd.setCursor (0,2);
+  lcd.print(F("U="));
+  lcd.print(busVoltage, 2);
+  lcd.print(F("V "));
+  lcd.print(F("I="));
+  lcd.print(current, 2);
+  lcd.print(F("A "));
+  lcd.setCursor(0,3 );
+  lcd.print(F("P="));
+  lcd.print(power,1);
+  lcd.print(F("W "));
+  lcd.print(F("C="));
+  lcd.print(totalCapacity, 1);
+  lcd.print(F("Ah")); 
+}
+
+void saveDataViaMQTT(){
+  if (!measurements->publish(busVoltage,current)){
+    regWiFi = false;
+    isWiFiok = false;
+  }
+}
+
+ButtonType readButton(){
+  short voltage = analogRead(KEYBOARD);
+  delay(200);
+  if (voltage < ANALOG_UP) return NONE;
+  if (voltage < ANALOG_DOWN) return UP;
+  if (voltage < ANALOG_ENTER) return DOWN;
+  return ENTER;
+}
+
+void WIFI_connect() {
+  WiFi.begin(SSID, WPAKey);
+  #ifdef DEBUG
+    Serial.print(F("Connecting to WiFi... "));
+  #endif
+  uint8_t retries = 5;
+  while (WiFi.status() != WL_CONNECTED) {
+       #ifdef DEBUG
+        Serial.println(F("Retrying WIFI connection in 5 seconds..."));
+       #endif
+       delay(5000);  // wait 5 seconds
+       retries--;
+       if (retries == 0) {
+        isWiFiok = false;
+        return;
+       }
+  }
+  isWiFiok = true;
+#ifdef DEBUG  
+  Serial.println(F("WIFI Connected!"));
+#endif
+}
+
+void MQTT_connect() {
+  mqtt = new Adafruit_MQTT_Client(&client, MQTTendpoint, port);
+// anonymous access, change for authentication
+  measurements = new Adafruit_MQTT_Publish(mqtt, MQTTTopic);
+  // Stop if already connected.
+  if (mqtt->connected()) {
+    return;
+  }
+  #ifdef DEBUG
+    Serial.print(F("Connecting to MQTT... "));
+  #endif
+
+  uint8_t retries = 2;
+  while (mqtt->connect() != 0) { // connect will return 0 for connected
+    #ifdef DEBUG
+      Serial.println(F("Retrying MQTT connection in 5 seconds..."));
+    #endif
+    mqtt->disconnect();
+    delay(5000);  // wait 5 seconds
+    retries--;
+    if (retries == 0) {
+      isWiFiok = false;
+      return;
+    }
+  }
+  #ifdef DEBUG
+    Serial.println("MQTT Connected!");
+  #endif
+}
+
+void setMQTTReg(){
+  ButtonType button;
+  lcd.clear();
+  button = NONE;
+  lcd.print(F("Register measurement"));
+  lcd.setCursor(0,1);
+  lcd.print(F("via MQTT? "));
+  while (button != ENTER){
+    if (!isConfigOK){
+      lcd.setCursor(0,2);
+      lcd.print(F("WiFi config error!"));
+      lcd.setCursor(0,3);
+      lcd.print(F("Press Enter key"));
+      regWiFi = false;
+      isWiFiok = false;
+    }
+    else{
+      lcd.setCursor(0,3);
+      lcd.print(regWiFi?F("YES"):F("NO "));
+    }
+    button = readButton();
+    if (button == UP || button == DOWN) regWiFi = !regWiFi;
+  }
+  if (regWiFi){
+    lcd.clear();
+    lcd.print(F("Connecting to WiFi"));
+    WIFI_connect();
+    lcd.setCursor(0,1);
+    lcd.print(F("Connecting to MQTT"));
+    MQTT_connect();
+    lcd.setCursor(0,2);
+    if (!isWiFiok){
+      regWiFi = false;
+      lcd.print(F("Connection error!"));
+      lcd.setCursor(0,3);
+      while (readButton() != ENTER){
+        lcd.print(F("Press Enter key")); // in loop, so watchdog does not reset the device
+      }
+    }
+  }
+}
+
+void setSDReg(){
+  ButtonType button;
+  lcd.clear();
+  button = NONE;
+  lcd.print(F("Register measurement"));
+  lcd.setCursor(0,1);
+  lcd.print(F("data on SD? "));
+  while (button != ENTER){
+    if (!isSDOk){
+      lcd.setCursor(0,2);
+      lcd.print(F("SD card error!"));
+      lcd.setCursor(0,3);
+      lcd.print(F("Press Enter key"));
+      regSD = false;
+    }
+    else{
+      lcd.setCursor(0,3);
+      lcd.print(regSD?F("YES"):F("NO "));
+    }
+    button = readButton();
+    if (button == UP || button == DOWN) regSD = !regSD;
+  }
+}
+
+void setMode(){
+  ButtonType button;
+  lcd.clear();
+  button = NONE;
+  lcd.print(F("Set data"));
+  lcd.setCursor(0,1);
+  lcd.print(F("registering mode"));
+  while (button != ENTER){
+    lcd.setCursor(0,3);
+    lcd.print(continousMode?F("CONTINOUS        "):F("CURRENT DETECTION"));
+    button = readButton();
+    if (button == UP || button == DOWN) continousMode = !continousMode;
+  }
+}
+
+void configOK(){
+  ButtonType button;
+  lcd.clear();
+  button = NONE;
+  lcd.print(F("Is config finished?"));
+  lcd.setCursor(0,1);
+  lcd.print(F("'YES' starts device"));
+  while (button != ENTER){
+    lcd.setCursor(0,3);
+    lcd.print(started?F("YES"):F("NO "));
+    button = readButton();
+    if (button == UP || button == DOWN) started = !started;
+  }
+}
+
+void setConfig(){
+  setMQTTReg();
+  setSDReg();
+  setMode();
+  configOK();
+  if (started){
+    lcd.clear();
+    lcd.print(F("Measurements started"));
+    lcd.setCursor(0,2);
+    lcd.print(F("Please wait"));
+    lcd.setCursor(0,3);
+    lcd.print(F("for first data."));
+  }
+}
+
+void discoverLowCurrent(){
+  if (current > OFF_CURRENT){
+      lowCurrent = false;
+      lowCurrentTime = 0;
+      reg = true;
+  }
+  else
+  {
+    if (!lowCurrent){ // first time - start counting
+      lowCurrent = true;
+      lowCurrentTime = 0;
+    }
+    else{ // counting - check if we should stop logging
+      lowCurrentTime++;
+      if (lowCurrentTime * STEP > OFF_DELAY){
+        reg = false;
+      }
+    }
+  }
+}
+
+void setup(){
+  delay(1000); // time for discover USB connection by PC
+  #ifdef DEBUG
+  Serial.begin(9600);
+  #endif
+  Wire.begin(D2,D1);
+
+  isSDOk = SD.begin(SPI_CS);
+  if (isSDOk){
+    #ifdef DEBUG
+    Serial.println(F("SD Present"));
+    #endif
+    readConfig();
+  }
+  #ifdef DEBUG
+  else {
+    Serial.println(F("SD not ready"));
+  }
+  #endif
+  setup_ina219();
+  lcd.begin();
 }
 
 void loop()
 {
-  reporDataViaSerial();
+  if (started){
+    lcd.noBacklight();  //just to know, that the file is opended
+    measureData();
+    displayData();
+    #ifdef DEBUG
+    reportDataViaSerial();
+    #endif
+    if (!continousMode) discoverLowCurrent(); //not continous, check if we should stop logging
+    if (reg){ // if we are in registering mode
+      if (isWiFiok && regWiFi) saveDataViaMQTT();
+      if (regSD) saveDataToCSV();
+    }
+    lcd.backlight();  //you can safely turn the device off
+    delay(STEP * 1000);
+  }
+  else{
+    setConfig();
+  }
 }
