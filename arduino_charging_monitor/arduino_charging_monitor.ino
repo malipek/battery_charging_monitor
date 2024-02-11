@@ -13,11 +13,8 @@ D8 - SPI CS for card reader
 
 /* Default for config */
 
-#define SHUNT 3.75 /* mOhms, default 20A 80mV */
-// #define SHUNT_R_40 /* 40mV shunt range, comment for 80mV */
-#define V_RANGE_16 /* Volts - comment for 32V max bus voltage */
 #define STEP 60 /* seconds */
-#define OFF_CURRENT 0.2 /* minimal of current's aboslute value to stop logging auto mode */
+#define OFF_CURRENT 0.2 /* minimal of current's aboslute value to stop logging in auto mode */
 #define OFF_DELAY 300 /* nuber of seconds before recording is disabled for OFF_CURENT */
 #define MIN_6V 5.26 /* 3 cells * 1.75V */
 #define MAX_6V 8.4/* 3 cells * 2.8V */
@@ -32,6 +29,12 @@ D8 - SPI CS for card reader
 #define ANALOG_UP 150
 #define ANALOG_DOWN 450
 #define ANALOG_ENTER 824
+
+/* current shunt hardware config */
+/* todo - move to config file and/or menu config */
+#define SHUNT 3.75 /* mOhms, default 20A 80mV */
+#define SHUNT_R_40 /* 40mV shunt range (10A max for 20A 80mV shunt), comment for 80mV */
+#define V_RANGE_16 /* Volts - comment for 32V max bus voltage */
 
 
 #include <Wire.h>
@@ -72,12 +75,13 @@ bool lowCurrent = false;
 unsigned short lowCurrentTime = 0u;
 bool isWiFiok = false;
 float batteryVoltage = 0.0;
+String filename = "datalog-1.csv";
 
 /* Network config values */
-char *MQTTendpoint = (char *)"";
-char *SSID = (char *)"";
-char *WPAKey = (char *)"";
-char *MQTTTopic = (char *)"";
+const char *MQTTendpoint = "";
+const char *SSID = "";
+const char *WPAKey = "";
+const char *MQTTTopic = "";
 int port = 1883;  //default MQTT plain text
 
 void getBatteryVoltage(float busVoltage){
@@ -115,9 +119,12 @@ float getPower(float measured_current, float measured_busVoltage){
 
 
 void readConfig(){
+  /*
+    Config file in KEY=VALUE format. No whitespaces. End file with a newline.
+  */
   File fp = SD.open("config.txt");
   char bufChrPtr[512];
-  char *strings[66]; //64 bytes + 2
+  char *strings[102]; //100 bytes + 2
   char *ptr = NULL;
   char *ptr2 = NULL;
   String buf = "";
@@ -154,15 +161,17 @@ void readConfig(){
           if (strcmp("SSID",ptr)==0) SSID=ptr2;
           if (strcmp("WPA2KEY",ptr)==0) WPAKey=ptr2;
           if (strcmp("ENDPOINT",ptr)==0) MQTTendpoint=ptr2;
-          if (strcmp("PORT",ptr)==0) port=(int)ptr2;
+          if (strcmp("PORT",ptr)==0) port=atoi(ptr2);
           if (strcmp("TOPIC",ptr)==0) MQTTTopic=ptr2;
           // get next token
           ptr = strtok(NULL,  (char *)"=");
         }
       }
     }
-    if (strlen(SSID)==0 || strlen(WPAKey)==0 || strlen(MQTTendpoint)==0 || strlen(MQTTTopic)==0)
+    if (strlen(SSID)==0 || strlen(WPAKey)==0 || strlen(MQTTendpoint)==0 || strlen(MQTTTopic)==0){
       isConfigOK = false;
+    }
+    else isConfigOK = true;
     #ifdef DEBUG
     Serial.print(F("SSID:")); Serial.println(SSID);
     Serial.print(F("WPA2KEY:")); Serial.println(WPAKey);
@@ -179,10 +188,18 @@ void readConfig(){
   }
 }
 
-
+void discoverFileNumber()
+{
+  short index = 1;
+  while (SD.exists(filename)){
+    index++;
+    filename = "datalog-" + index;
+    filename = filename + ".csv";
+  }
+}
 
 void saveDataToCSV(){
-  File dataFile = SD.open("datalog.txt", FILE_WRITE);
+  File dataFile = SD.open(filename, FILE_WRITE);
   if (dataFile){
     String dataString = (String)(counter * STEP) + "," + (String)busVoltage + "," + (String)current + ";";
     dataFile.seek(EOF);
@@ -249,7 +266,7 @@ void displayData(){
   lcd.print(F("MODE:"));
   lcd.print(continousMode?F("CONT"):F("AUTO"));
   lcd.print(F(" REG:"));
-  if (regWiFi && isWiFiok) lcd.print(F("WiFi "));
+  if (regWiFi && isWiFiok) lcd.print(F("Wi "));
   if (regSD && isSDOk) lcd.print(F("SD "));
   lcd.setCursor (0,2);
   lcd.print(F("U="));
@@ -268,9 +285,24 @@ void displayData(){
 }
 
 void saveDataViaMQTT(){
-  if (!measurements->publish(busVoltage,current)){
+  String SC = String(current,2);
+  String SV = String(busVoltage,2);
+  #ifdef DEBUG
+      Serial.println((SV+","+SC));
+  #endif
+  if (!measurements->publish((char *)(SV+","+SC).c_str())){
+  //  if (!measurements->publish("11.01,0.00")){
     regWiFi = false;
     isWiFiok = false;
+    WiFi.mode(WIFI_OFF);
+    #ifdef DEBUG
+      Serial.println("MQTT error!");
+    #endif
+  }
+  else{
+    #ifdef DEBUG
+    Serial.println("MQTT published");
+    #endif
   }
 }
 
@@ -318,7 +350,7 @@ void MQTT_connect() {
     Serial.print(F("Connecting to MQTT... "));
   #endif
 
-  uint8_t retries = 2;
+  uint8_t retries = 5;
   while (mqtt->connect() != 0) { // connect will return 0 for connected
     #ifdef DEBUG
       Serial.println(F("Retrying MQTT connection in 5 seconds..."));
@@ -360,22 +392,27 @@ void setMQTTReg(){
     if (button == UP || button == DOWN) regWiFi = !regWiFi;
   }
   if (regWiFi){
+    WiFi.mode(WIFI_STA);
     lcd.clear();
     lcd.print(F("Connecting to WiFi"));
     WIFI_connect();
     lcd.setCursor(0,1);
-    lcd.print(F("Connecting to MQTT"));
-    MQTT_connect();
+    if (isWiFiok){
+      lcd.print(F("Connecting to MQTT"));
+      MQTT_connect();
+    }
     lcd.setCursor(0,2);
     if (!isWiFiok){
+      WiFi.mode(WIFI_OFF);
       regWiFi = false;
       lcd.print(F("Connection error!"));
-      lcd.setCursor(0,3);
       while (readButton() != ENTER){
+        lcd.setCursor(0,3);
         lcd.print(F("Press Enter key")); // in loop, so watchdog does not reset the device
       }
     }
   }
+  else WiFi.mode(WIFI_OFF);
 }
 
 void setSDReg(){
@@ -400,6 +437,7 @@ void setSDReg(){
     button = readButton();
     if (button == UP || button == DOWN) regSD = !regSD;
   }
+  if (regSD) discoverFileNumber();
 }
 
 void setMode(){
@@ -494,7 +532,6 @@ void setup(){
 void loop()
 {
   if (started){
-    lcd.noBacklight();  //just to know, that the file is opended
     measureData();
     displayData();
     #ifdef DEBUG
@@ -505,7 +542,6 @@ void loop()
       if (isWiFiok && regWiFi) saveDataViaMQTT();
       if (regSD) saveDataToCSV();
     }
-    lcd.backlight();  //you can safely turn the device off
     delay(STEP * 1000);
   }
   else{
