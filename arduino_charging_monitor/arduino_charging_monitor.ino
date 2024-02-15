@@ -9,7 +9,7 @@ D7 - SPI MISO
 D8 - SPI CS for card reader
 */
 
-#define DEBUG // comment-out for productions
+// #define DEBUG // comment-out for productions
 
 /* Default for config */
 
@@ -61,7 +61,6 @@ float totalPower = 0.0;
 float totalCapacity = 0.0;
 float shuntVoltage = 0.0;
 float power = 0.0;
-unsigned long counter = 0u;
 
 /* runtime configs */
 bool regWiFi = false;
@@ -72,10 +71,12 @@ bool continousMode = false;
 bool isConfigOK = false;
 bool started = false;
 bool lowCurrent = false;
-unsigned short lowCurrentTime = 0u;
+unsigned long lowCurrentTime = 0u;
 bool isWiFiok = false;
 float batteryVoltage = 0.0;
 String filename = "datalog-1.csv";
+unsigned long now,last,runningTime,seconds = 0u;
+int period,delta = 0;
 
 /* Network config values */
 const char *MQTTendpoint = "";
@@ -201,7 +202,7 @@ void discoverFileNumber()
 void saveDataToCSV(){
   File dataFile = SD.open(filename, FILE_WRITE);
   if (dataFile){
-    String dataString = (String)(counter * STEP) + "," + (String)busVoltage + "," + (String)current + ";";
+    String dataString = (String)(seconds) + "," + (String)busVoltage + "," + (String)current + ";";
     dataFile.seek(EOF);
     dataFile.println(dataString);
     dataFile.close();
@@ -217,13 +218,12 @@ void measureData(){
   busVoltage = ina219.getBusVoltage_V();
   current = getCurrent(shuntVoltage);
   power = getPower(current, busVoltage);
-  totalPower = totalPower + (power * STEP / 3600);
+  totalPower = totalPower + (power * delta / 3600000);
   if (batteryVoltage==0.0){
     // have we connected the battery?
     getBatteryVoltage(busVoltage);
   }
   totalCapacity = (batteryVoltage==0.0?0.0:totalPower/batteryVoltage);
-  counter++;
 }
 
 
@@ -256,11 +256,14 @@ void reportDataViaSerial(){
 #endif
 
 void displayData(){
+  seconds = runningTime / 1000;
   lcd.clear();
   lcd.print(F("TIME:"));
-  lcd.print((int)(counter * STEP / 3600));
+  lcd.print((int)(seconds / 3600));
   lcd.print(F(":"));
-  lcd.print((int)(counter * STEP % 3600 / 60));
+  lcd.print((int)(seconds % 3600) / 60);
+  lcd.print(F(":"));
+  lcd.print((int)(seconds % 3600 ) % 60);
   if (!reg) lcd.print(F(" STOP"));
   lcd.setCursor(0,1);
   lcd.print(F("MODE:"));
@@ -488,18 +491,18 @@ void setConfig(){
 void discoverLowCurrent(){
   if (current > OFF_CURRENT){
       lowCurrent = false;
-      lowCurrentTime = 0;
+      lowCurrentTime = seconds;
       reg = true;
   }
   else
   {
     if (!lowCurrent){ // first time - start counting
       lowCurrent = true;
-      lowCurrentTime = 0;
+      lowCurrentTime = seconds;
     }
     else{ // counting - check if we should stop logging
       lowCurrentTime++;
-      if (lowCurrentTime * STEP > OFF_DELAY){
+      if (seconds - lowCurrentTime > OFF_DELAY){
         reg = false;
       }
     }
@@ -507,7 +510,7 @@ void discoverLowCurrent(){
 }
 
 void setup(){
-  delay(1000); // time for discover USB connection by PC
+  delay(2000); // time for discover USB connection by PC
   #ifdef DEBUG
   Serial.begin(9600);
   #endif
@@ -534,17 +537,25 @@ void loop()
   if (started){
     measureData();
     displayData();
-    #ifdef DEBUG
-    reportDataViaSerial();
-    #endif
+    delay(2000);
+    delta = millis()-now;
+    runningTime = runningTime + delta;
+    now = millis();
+    period = (int)((now - last)/1000);
     if (!continousMode) discoverLowCurrent(); //not continous, check if we should stop logging
-    if (reg){ // if we are in registering mode
-      if (isWiFiok && regWiFi) saveDataViaMQTT();
-      if (regSD) saveDataToCSV();
+    if (period > STEP){
+      last = now;
+      #ifdef DEBUG
+      reportDataViaSerial();
+      #endif
+      if (reg){ // if we are in registering mode
+        if (isWiFiok && regWiFi) saveDataViaMQTT();
+        if (regSD) saveDataToCSV();
+      }
     }
-    delay(STEP * 1000);
   }
   else{
     setConfig();
+    now = millis();
   }
 }
