@@ -501,7 +501,6 @@ void discoverLowCurrent(){
       lowCurrentTime = seconds;
     }
     else{ // counting - check if we should stop logging
-      lowCurrentTime++;
       if (seconds - lowCurrentTime > OFF_DELAY){
         reg = false;
       }
@@ -556,6 +555,5 @@ void loop()
   }
   else{
     setConfig();
-    now = millis();
   }
 }
