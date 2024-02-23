@@ -10,6 +10,7 @@ D8 - SPI CS for card reader
 */
 
 // #define DEBUG // comment-out for productions
+// #define SKIPSETUP //comment-out for menu
 
 /* Default for config */
 
@@ -74,15 +75,15 @@ bool lowCurrent = false;
 unsigned long lowCurrentTime = 0u;
 bool isWiFiok = false;
 float batteryVoltage = 0.0;
-String filename = "datalog-1.csv";
+String filename = String("datalog-1.csv");
 unsigned long now,last,runningTime,seconds = 0u;
 int period,delta = 0;
 
 /* Network config values */
-const char *MQTTendpoint = "";
-const char *SSID = "";
-const char *WPAKey = "";
-const char *MQTTTopic = "";
+String MQTTendpoint="";
+String SSID="";
+String WPAKey="";
+String MQTTTopic="";
 int port = 1883;  //default MQTT plain text
 
 void getBatteryVoltage(float busVoltage){
@@ -120,59 +121,36 @@ float getPower(float measured_current, float measured_busVoltage){
 
 
 void readConfig(){
-  /*
-    Config file in KEY=VALUE format. No whitespaces. End file with a newline.
-  */
   File fp = SD.open("config.txt");
-  char bufChrPtr[512];
-  char *strings[102]; //100 bytes + 2
-  char *ptr = NULL;
-  char *ptr2 = NULL;
-  String buf = "";
-  unsigned short index = 0;
   if (fp){
-    #ifdef DEBUG
-    Serial.println("File opened"); 
-    #endif
     while (fp.available()){
-      buf.concat(fp.readString());
-    }
-    fp.close();
-    buf.toCharArray(bufChrPtr, 512);
-    ptr = strtok(bufChrPtr, "\r\n");
-    while(ptr != NULL)
-    {
-        //split lines
-        if (strlen(ptr)>0){
-          strings[index] = ptr;
-          index++;
-          ptr = strtok(NULL, "\r\n");
-        }
-    }
-    // tokenize with =
-    for (unsigned short i=0; i<index; i++){
-      ptr = strtok(strings[i], (char *)"=");
-      // first token - param name
-      while(ptr != NULL)
-      {
-        // string will be empty for windows or mac line ending
-        if (strlen(ptr)>0){
-            // get next token - param value
-           ptr2 = strtok(NULL,  (char *)"=");
-          if (strcmp("SSID",ptr)==0) SSID=ptr2;
-          if (strcmp("WPA2KEY",ptr)==0) WPAKey=ptr2;
-          if (strcmp("ENDPOINT",ptr)==0) MQTTendpoint=ptr2;
-          if (strcmp("PORT",ptr)==0) port=atoi(ptr2);
-          if (strcmp("TOPIC",ptr)==0) MQTTTopic=ptr2;
-          // get next token
-          ptr = strtok(NULL,  (char *)"=");
+      String line = fp.readStringUntil('\n');
+      line.trim(); // Remove leading/trailing whitespaces
+      #ifdef DEBUG
+      Serial.print("Config line: ");
+      Serial.println(line);
+      #endif
+      if (line.length() > 0){
+        int equalsIndex = line.indexOf('=');
+        if (equalsIndex != -1){
+          String key = line.substring(0, equalsIndex);
+          String value = line.substring(equalsIndex + 1);
+          #ifdef DEBUG
+          Serial.print("Key: ");
+          Serial.println(key);
+          Serial.print("Value: ");
+          Serial.println(value);
+          #endif
+          if (key == "SSID") SSID=value;
+          else if (key == "WPA2KEY") WPAKey=value;
+          else if (key == "ENDPOINT") MQTTendpoint=value;
+          else if (key == "PORT") port = value.toInt();
+          else if (key == "TOPIC") MQTTTopic=value;
         }
       }
     }
-    if (strlen(SSID)==0 || strlen(WPAKey)==0 || strlen(MQTTendpoint)==0 || strlen(MQTTTopic)==0){
-      isConfigOK = false;
-    }
-    else isConfigOK = true;
+    fp.close();
+    isConfigOK = (SSID.length() > 0 && WPAKey.length() > 0 && MQTTendpoint.length() > 0 && MQTTTopic.length() > 0);
     #ifdef DEBUG
     Serial.print(F("SSID:")); Serial.println(SSID);
     Serial.print(F("WPA2KEY:")); Serial.println(WPAKey);
@@ -192,10 +170,17 @@ void readConfig(){
 void discoverFileNumber()
 {
   short index = 1;
+  #ifdef DEBUG
+  Serial.println("Filename: "+filename);
+  #endif
   while (SD.exists(filename)){
     index++;
-    filename = "datalog-" + index;
-    filename = filename + ".csv";
+    filename = String("datalog-");
+    filename.concat(String(index));
+    filename.concat(String(".csv"));
+    #ifdef DEBUG
+      Serial.println("Filename: "+filename);
+    #endif
   }
 }
 
@@ -207,6 +192,7 @@ void saveDataToCSV(){
     dataFile.println(dataString);
     dataFile.close();
     #ifdef DEBUG
+      Serial.println("Filename: "+filename);
       Serial.println(F("Data record saved do SD"));
     #endif
   }
@@ -294,22 +280,26 @@ void saveDataViaMQTT(){
       Serial.println((SV+","+SC));
   #endif
   if (!measurements->publish((char *)(SV+","+SC).c_str())){
-  //  if (!measurements->publish("11.01,0.00")){
     regWiFi = false;
     isWiFiok = false;
     WiFi.mode(WIFI_OFF);
     #ifdef DEBUG
-      Serial.println("MQTT error!");
+      Serial.print(F("MQTT topic: "));
+      Serial.println(MQTTTopic);
+      Serial.println(F("MQTT error!"));
     #endif
   }
   else{
     #ifdef DEBUG
-    Serial.println("MQTT published");
+    Serial.println(F("MQTT published"));
     #endif
   }
 }
 
 ButtonType readButton(){
+  #ifdef SKIPSETUP
+  return ENTER;
+  #endif
   short voltage = analogRead(KEYBOARD);
   delay(200);
   if (voltage < ANALOG_UP) return NONE;
@@ -342,9 +332,9 @@ void WIFI_connect() {
 }
 
 void MQTT_connect() {
-  mqtt = new Adafruit_MQTT_Client(&client, MQTTendpoint, port);
+  mqtt = new Adafruit_MQTT_Client(&client, MQTTendpoint.c_str(), port);
 // anonymous access, change for authentication
-  measurements = new Adafruit_MQTT_Publish(mqtt, MQTTTopic);
+  measurements = new Adafruit_MQTT_Publish(mqtt, MQTTTopic.c_str());
   // Stop if already connected.
   if (mqtt->connected()) {
     return;
@@ -474,11 +464,17 @@ void configOK(){
 }
 
 void setConfig(){
+  #ifdef SKIPSETUP
+  started = true;
+  regSD = true;
+  regWiFi = true;
+  #endif
   setMQTTReg();
   setSDReg();
   setMode();
   configOK();
   if (started){
+    now = millis();
     lcd.clear();
     lcd.print(F("Measurements started"));
     lcd.setCursor(0,2);
