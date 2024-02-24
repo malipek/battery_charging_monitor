@@ -57,7 +57,9 @@ enum ButtonType {NONE, UP, DOWN, ENTER};
 
 /* globals for data measurements */
 float busVoltage = 0.0;
+float avgBusVoltage = 0.0;
 float current = 0.0;
+float avgCurrent = 0.0;
 float totalPower = 0.0;
 float totalCapacity = 0.0;
 float shuntVoltage = 0.0;
@@ -77,7 +79,7 @@ bool isWiFiok = false;
 float batteryVoltage = 0.0;
 String filename = String("datalog-1.csv");
 unsigned long now,last,runningTime,seconds = 0u;
-int period,delta = 0;
+int period,delta,counter = 0;
 
 /* Network config values */
 String MQTTendpoint="";
@@ -187,13 +189,14 @@ void discoverFileNumber()
 void saveDataToCSV(){
   File dataFile = SD.open(filename, FILE_WRITE);
   if (dataFile){
-    String dataString = (String)(seconds) + "," + (String)busVoltage + "," + (String)current + ";";
+    String dataString = (String)(seconds) + "," + (String)avgBusVoltage + "," + (String)avgCurrent;
     dataFile.seek(EOF);
     dataFile.println(dataString);
     dataFile.close();
     #ifdef DEBUG
-      Serial.println("Filename: "+filename);
-      Serial.println(F("Data record saved do SD"));
+      Serial.print(F("Data record saved do SD, filename: "));
+      Serial.println(filename);
+      Serial.println(dataString);
     #endif
   }
   else regSD=false;
@@ -216,7 +219,7 @@ void measureData(){
 #ifdef DEBUG
 void reportDataViaSerial(){
   Serial.print(F("Bus Voltage:   "));
-  Serial.print(busVoltage, 2);
+  Serial.print(avgBusVoltage, 2);
   Serial.println(F("V"));
 
   Serial.print(F("Shunt Voltage:   "));
@@ -224,11 +227,8 @@ void reportDataViaSerial(){
   Serial.println(F("mV"));
 
   Serial.print(F("Current:      "));
-  Serial.print(current, 2);
+  Serial.print(avgCurrent, 2);
   Serial.println(F("A"));
-  Serial.print(F("Power:        "));
-  Serial.print(power, 2);
-  Serial.println(F("W"));
 
   Serial.print(F("Total power:        "));
   Serial.print(totalPower, 2);
@@ -241,15 +241,33 @@ void reportDataViaSerial(){
 }
 #endif
 
+void displaySavingMessage(){
+  lcd.setCursor(0,1);
+  lcd.print(F("SAVING DATA"));
+}
+
 void displayData(){
   seconds = runningTime / 1000;
+  int tmpVal = 0;
   lcd.clear();
   lcd.print(F("TIME:"));
-  lcd.print((int)(seconds / 3600));
+  tmpVal = (int)seconds / 3600;
+  if (tmpVal<10){
+    lcd.print(F("0"));
+  }
+  lcd.print(tmpVal);
   lcd.print(F(":"));
-  lcd.print((int)(seconds % 3600) / 60);
+  tmpVal = (int)(seconds % 3600) / 60;
+  if (tmpVal<10){
+    lcd.print(F("0"));
+  }
+  lcd.print(tmpVal);
   lcd.print(F(":"));
-  lcd.print((int)(seconds % 3600 ) % 60);
+  tmpVal = (int)(seconds % 3600 ) % 60;
+  if (tmpVal<10){
+    lcd.print(F("0"));
+  }
+  lcd.print(tmpVal);
   if (!reg) lcd.print(F(" STOP"));
   lcd.setCursor(0,1);
   lcd.print(F("MODE:"));
@@ -266,24 +284,23 @@ void displayData(){
   lcd.print(F("A "));
   lcd.setCursor(0,3 );
   lcd.print(F("P="));
-  lcd.print(power,1);
+  lcd.print(power,2);
   lcd.print(F("W "));
   lcd.print(F("C="));
-  lcd.print(totalCapacity, 1);
+  lcd.print(totalCapacity, 2);
   lcd.print(F("Ah")); 
 }
 
 void saveDataViaMQTT(){
-  String SC = String(current,2);
-  String SV = String(busVoltage,2);
+  String SC = String(avgCurrent,2);
+  String SV = String(avgBusVoltage,2);
   #ifdef DEBUG
-      Serial.println((SV+","+SC));
+      Serial.println("MQTT value: "+SV+","+SC);
   #endif
   if (!measurements->publish((char *)(SV+","+SC).c_str())){
-    regWiFi = false;
-    isWiFiok = false;
-    WiFi.mode(WIFI_OFF);
+    MQTTDisconnect();
     #ifdef DEBUG
+      Serial.println((char *)(SV+","+SC).c_str());
       Serial.print(F("MQTT topic: "));
       Serial.println(MQTTTopic);
       Serial.println(F("MQTT error!"));
@@ -475,12 +492,6 @@ void setConfig(){
   configOK();
   if (started){
     now = millis();
-    lcd.clear();
-    lcd.print(F("Measurements started"));
-    lcd.setCursor(0,2);
-    lcd.print(F("Please wait"));
-    lcd.setCursor(0,3);
-    lcd.print(F("for first data."));
   }
 }
 
@@ -505,7 +516,7 @@ void discoverLowCurrent(){
 }
 
 void setup(){
-  delay(2000); // time for discover USB connection by PC
+  delay(1000); // time for discover USB connection by PC
   #ifdef DEBUG
   Serial.begin(9600);
   #endif
@@ -527,19 +538,41 @@ void setup(){
   lcd.begin();
 }
 
+void MQTTDisconnect(){
+  regWiFi = false;
+    isWiFiok = false;
+    mqtt->disconnect();
+    WiFi.mode(WIFI_OFF);
+}
+
 void loop()
 {
   if (started){
     measureData();
     displayData();
-    delay(2000);
+    avgBusVoltage = avgBusVoltage + busVoltage;
+    avgCurrent = avgCurrent + current;
+    counter++;
+    if (counter % 30 == 0){
+      if(! mqtt->ping()) {
+        #ifdef DEBUG
+        Serial.println("MQTT ping failed!");
+        #endif
+        MQTTDisconnect();
+      }
+    }
+    delay(1000);
     delta = millis()-now;
     runningTime = runningTime + delta;
     now = millis();
     period = (int)((now - last)/1000);
     if (!continousMode) discoverLowCurrent(); //not continous, check if we should stop logging
     if (period > STEP){
+      displaySavingMessage();
       last = now;
+      // calcuate average of measurements to log
+      avgCurrent = avgCurrent / counter;
+      avgBusVoltage = avgBusVoltage / counter;
       #ifdef DEBUG
       reportDataViaSerial();
       #endif
@@ -547,6 +580,9 @@ void loop()
         if (isWiFiok && regWiFi) saveDataViaMQTT();
         if (regSD) saveDataToCSV();
       }
+      avgCurrent = 0.0;
+      avgBusVoltage = 0.0;
+      counter = 0;
     }
   }
   else{
