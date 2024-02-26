@@ -1,1 +1,2 @@
-# battery_charging_monitor
+# Acid-lead battery charging monitor
+
