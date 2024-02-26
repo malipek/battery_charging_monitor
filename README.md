@@ -24,7 +24,7 @@ Displayed parameters (measured every second):
 Data is collected in two modes:
 
 * continuous mode - from manual start to power down
-* auto - form manual start until the current is lower then 0.2 during 5 minutes
+* auto - from manual start until the current is lower than 0.2A during 5 minutes
 
 ## Modules
 
