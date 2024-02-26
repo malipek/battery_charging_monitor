@@ -496,7 +496,7 @@ void setConfig(){
 }
 
 void discoverLowCurrent(){
-  if (current > OFF_CURRENT){
+  if (abs(current) > OFF_CURRENT){
       lowCurrent = false;
       lowCurrentTime = seconds;
       reg = true;
