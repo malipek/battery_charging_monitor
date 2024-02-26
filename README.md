@@ -26,6 +26,16 @@ Data is collected in two modes:
 * continuous mode - from manual start to power down
 * auto - from manual start until the current is lower than 0.2A during 5 minutes
 
+## Boundaries
+
+| Parameter | Value | Possible value* |
+| --- | --- | --- |
+| Max. battery voltage | 16V | 31V |
+| Min. battery voltage | 7V | 7V |
+| Max. measured current | +/- 10A | +/- 15A |
+
+*-requires change in preprocessor's macros
+
 ## Modules
 
 ![Solution divided into functional modules](https://raw.githubusercontent.com/malipek/battery_charging_monitor/master/assets/arduino-battery-charger-monitor-blocks.png)
