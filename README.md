@@ -81,9 +81,9 @@ Positive current reading means, that the current flows from charger to battery (
 
 Negative current reading means, that the battery is being discharged.
 
-The device is powered from measured circuit and it's power consumption is blow 0.3W.
+The device is powered from measured circuit and it's power consumption is around __250mW__.
 
-Minimal voltage level of measured circuit is __7V__.
+Minimal voltage for powering the circuit is __7V__.
 
 ![Electronic schematic of INA219, battery, charger, shunt and LCD connections](https://raw.githubusercontent.com/malipek/battery_charging_monitor/master/assets/arduino-battery-charger-LCD-INA219-POWER.png)
 
