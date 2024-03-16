@@ -553,7 +553,7 @@ void loop()
     avgBusVoltage = avgBusVoltage + busVoltage;
     avgCurrent = avgCurrent + current;
     counter++;
-    if (counter % 30 == 0){
+    if (regWiFi && (counter % 30 == 0)){
       if(! mqtt->ping()) {
         #ifdef DEBUG
         Serial.println("MQTT ping failed!");
