@@ -86,6 +86,8 @@ String MQTTendpoint="";
 String SSID="";
 String WPAKey="";
 String MQTTTopic="";
+String MQTTUser="";
+String MQTTPassword="";
 int port = 1883;  //default MQTT plain text
 
 void getBatteryVoltage(float busVoltage){
@@ -148,6 +150,8 @@ void readConfig(){
           else if (key == "ENDPOINT") MQTTendpoint=value;
           else if (key == "PORT") port = value.toInt();
           else if (key == "TOPIC") MQTTTopic=value;
+          else if (key == "USER") MQTTUser=value;
+          else if (key == "PASSWORD") MQTTPassword=value;
         }
       }
     }
@@ -159,6 +163,8 @@ void readConfig(){
     Serial.print(F("ENDPOINT:")); Serial.println(MQTTendpoint);
     Serial.print(F("PORT:")); Serial.println(port);
     Serial.print(F("TOPIC:")); Serial.println(MQTTTopic);
+    Serial.print(F("USER:")); Serial.println(MQTTUser);
+    Serial.print(F("PASSWORD:")); Serial.println(MQTTPassword);
     #endif
   }
   else{
@@ -295,9 +301,9 @@ void saveDataViaMQTT(){
   String SC = String(avgCurrent,2);
   String SV = String(avgBusVoltage,2);
   #ifdef DEBUG
-      Serial.println("MQTT value: "+SV+","+SC);
+      Serial.println("MQTT value: {\"voltage\":"+SV+",\"current\":"+SC+"}");
   #endif
-  if (!measurements->publish((char *)(SV+","+SC).c_str())){
+  if (!measurements->publish((char *)("{\"voltage\":"+SV+",\"current\":"+SC+"}").c_str())){
     MQTTDisconnect();
     #ifdef DEBUG
       Serial.println((char *)(SV+","+SC).c_str());
@@ -349,7 +355,12 @@ void WIFI_connect() {
 }
 
 void MQTT_connect() {
-  mqtt = new Adafruit_MQTT_Client(&client, MQTTendpoint.c_str(), port);
+  if (MQTTUser.length() > 0){
+    mqtt = new Adafruit_MQTT_Client(&client, MQTTendpoint.c_str(), port, MQTTUser.c_str(), MQTTPassword.c_str());
+  }
+  else{
+    mqtt = new Adafruit_MQTT_Client(&client, MQTTendpoint.c_str(), port);
+  }
 // anonymous access, change for authentication
   measurements = new Adafruit_MQTT_Publish(mqtt, MQTTTopic.c_str());
   // Stop if already connected.

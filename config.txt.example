@@ -3,4 +3,6 @@ WPA2KEY=My network password
 ENDPOINT=192.168.1.10
 PORT=1884
 TOPIC=charging_monitor
+USER=mqttuser
+PASSWORD=mqttpassword
 //newline ad the end
